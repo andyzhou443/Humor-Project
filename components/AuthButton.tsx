@@ -16,7 +16,7 @@ export default function AuthButton({ user }: { user: any }) {
         queryParams: {
           access_type: 'offline',
           prompt: 'consent',
-          client_id: '388960353527-fh4grc6mla425lg0e3g1hh67omtrdihd.apps.googleusercontent.com',
+          //client_id: '388960353527-fh4grc6mla425lg0e3g1hh67omtrdihd.apps.googleusercontent.com',
         },
         redirectTo: `${window.location.origin}/auth/callback`,
       },

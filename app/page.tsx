@@ -2,73 +2,86 @@ import Image from "next/image";
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import AuthButton from "@/components/AuthButton";
+import VotingInterface from "@/components/VotingInterface";
+
+// 1. Define the shape of your data
+type Caption = {
+  id: string
+  content: string | null
+  image_id: string
+  images: {
+    url: string
+  } | null // This handles if the join returns a null image
+}
 
 export default async function Home() {
   const cookieStore = await cookies()
   
-  // 1. Initialize SSR Client
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         getAll() { return cookieStore.getAll() },
-        setAll(cookiesToSet) { /* handled by middleware or ignored in server components */ }
+        setAll(cookiesToSet) { }
       },
     }
   )
 
-  // 2. Check for User
   const { data: { user } } = await supabase.auth.getUser()
 
-  // 3. Fetch data (Only if user is logged in)
-  let images = null
+  // 2. Initialize with the explicit type
+  let captions: Caption[] = []
   let error = null
   
   if (user) {
     const response = await supabase
-      .from('images')
-      .select('id, url, image_description, celebrity_recognition')
-      .limit(10);
-    images = response.data
+      .from('captions')
+      .select(`
+        id,
+        content,
+        image_id,
+        images (
+          url
+        )
+      `)
+      .limit(20);
+      
+    // 3. Cast the response data to match your type
+    if (response.data) {
+      captions = response.data as unknown as Caption[]
+    }
     error = response.error
   }
 
   return (
     <div className="flex min-h-screen flex-col items-center bg-zinc-50 font-sans dark:bg-black">
-      {/* Navigation Bar */}
-      <nav className="flex w-full max-w-5xl justify-end p-6">
+      <nav className="flex w-full max-w-2xl justify-end p-6">
         <AuthButton user={user} />
       </nav>
 
-      <main className="flex w-full max-w-5xl flex-col items-center py-10 px-6 sm:items-start">
-        <header className="mb-12">
-          <Image className="dark:invert mb-6" src="/next.svg" alt="Next.js" width={100} height={20} priority />
-          <h1 className="text-4xl font-bold tracking-tight text-black dark:text-zinc-50">Image Database</h1>
+      <main className="flex w-full max-w-2xl flex-col items-center py-6 px-6">
+        <header className="mb-10 flex flex-col items-center text-center">
+          <Image className="dark:invert mb-4" src="/next.svg" alt="Next.js" width={100} height={20} priority />
+          <h1 className="text-3xl font-bold tracking-tight text-black dark:text-zinc-50">Rate the Caption</h1>
+          <p className="mt-2 text-zinc-500">Vote on the best matches.</p>
         </header>
 
         {!user ? (
-          /* GATED UI */
           <div className="w-full rounded-xl border-2 border-dashed border-zinc-300 p-20 text-center dark:border-zinc-800">
-            <h2 className="text-xl font-semibold">Please log in to view the database</h2>
-            <p className="text-zinc-500">Access is restricted to authorized users.</p>
+            <h2 className="text-xl font-semibold">Please log in to start voting</h2>
+            <p className="text-zinc-500 mt-2">Access is restricted to authorized users.</p>
           </div>
         ) : (
-          /* PROTECTED CONTENT */
           <>
-            {error && <div className="p-4 bg-red-100 text-red-700 rounded-md mb-6">Error: {error.message}</div>}
-            <div className="grid w-full grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {images?.map((img) => (
-                <div key={img.id} className="group flex flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                   <div className="relative aspect-square w-full bg-zinc-100 dark:bg-zinc-800">
-                    <img src={img.url} alt={img.image_description} className="h-full w-full object-cover" />
-                  </div>
-                  <div className="p-4">
-                    <h3 className="text-sm font-semibold">{img.image_description || "No description"}</h3>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {error && (
+              <div className="p-4 bg-red-100 text-red-700 rounded-md mb-6 w-full">
+                Error: {error.message}
+              </div>
+            )}
+            
+            {/* The types should now match perfectly */}
+            <VotingInterface initialCaptions={captions} userId={user.id} />
           </>
         )}
       </main>

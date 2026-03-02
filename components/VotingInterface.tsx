@@ -1,20 +1,18 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
-import { Heart, X } from 'lucide-react' // Assuming you have lucide-react, or use SVGs
-// components/VotingInterface.tsx
+import { Heart, X } from 'lucide-react'
 
-// CHANGE THIS:
 type CaptionData = {
   id: string
-  content: string | null  // <--- Allow null here
+  content: string | null
   image_id: string
   images: {
     url: string
   } | null
 }
-// ... rest of the file
+
 interface VotingInterfaceProps {
   initialCaptions: CaptionData[]
   userId: string
@@ -23,61 +21,69 @@ interface VotingInterfaceProps {
 export default function VotingInterface({ initialCaptions, userId }: VotingInterfaceProps) {
   const [queue, setQueue] = useState<CaptionData[]>(initialCaptions)
   const [currentIndex, setCurrentIndex] = useState(0)
-  const [loading, setLoading] = useState(false)
+  
+  // NEW: State to track which direction the card is animating out
+  const [animatingOut, setAnimatingOut] = useState<'left' | 'right' | null>(null)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   )
 
-  // Determine current and next items
   const currentItem = queue[currentIndex]
   const nextItem = queue[currentIndex + 1]
 
-const handleVote = async (voteValue: number) => {
-    if (!currentItem) return
+  const handleVote = useCallback(async (voteValue: number) => {
+    // Prevent double-clicking while an animation is already running
+    if (!currentItem || animatingOut) return
 
-    // 1. Capture current ID before moving index
+    // 1. Trigger the swipe-out animation based on the vote value
+    setAnimatingOut(voteValue === 1 ? 'right' : 'left')
+
     const captionIdToVote = currentItem.id
-
-    // 2. OPTIMISTIC UI: Move to next immediately
-    if (currentIndex < queue.length - 1) {
-    setCurrentIndex((prev) => prev + 1)
-    } else {
-    setQueue([]) // Clear or show "No more items" state
-    }
-
-    // 3. Prepare the data payload
     const votePayload = {
-    profile_id: userId,
-    caption_id: captionIdToVote,
-    vote_value: voteValue,
-    created_datetime_utc: new Date().toISOString(),
-    modified_datetime_utc: new Date().toISOString(),
+      profile_id: userId,
+      caption_id: captionIdToVote,
+      vote_value: voteValue,
+      created_datetime_utc: new Date().toISOString(),
+      modified_datetime_utc: new Date().toISOString(),
     }
 
-    // --- LOGGING HERE ---
-    console.log("🚀 Sending Vote to DB:", votePayload)
-    // --------------------
+    // 2. Wait for the 300ms CSS transition to finish before changing the data
+    setTimeout(() => {
+      if (currentIndex < queue.length - 1) {
+        setCurrentIndex((prev) => prev + 1)
+      } else {
+        setQueue([]) 
+      }
+      // Reset animation state so the new card appears in the center
+      setAnimatingOut(null)
+    }, 300)
 
-    // 4. Database Update
-    try {
-    const { error } = await supabase
-        .from('caption_votes')
-        .upsert(votePayload, { 
-            onConflict: 'profile_id, caption_id' 
-        })
+    // 3. Send to DB (we don't await this so it doesn't block the UI)
+    supabase.from('caption_votes').upsert(votePayload, { onConflict: 'profile_id, caption_id' })
+      .then(({ error }) => {
+        if (error) console.error('Error recording vote:', error)
+      })
 
-    if (error) {
-        console.error('Error recording vote:', error)
-    } else {
-        console.log("✅ Vote success!")
+  }, [currentItem, currentIndex, queue.length, userId, supabase, animatingOut])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return
+      }
+      if (e.key === 'ArrowLeft') {
+        handleVote(-1)
+      } else if (e.key === 'ArrowRight') {
+        handleVote(1)
+      }
     }
-    } catch (err) {
-    console.error('Unexpected error:', err)
-    }
-}
-  // If we run out of items
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handleVote]) 
+
   if (!currentItem) {
     return (
       <div className="flex h-96 w-full items-center justify-center rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700">
@@ -89,54 +95,78 @@ const handleVote = async (voteValue: number) => {
   return (
     <div className="flex w-full flex-col items-center gap-6">
       
-      {/* CARD CONTAINER */}
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+      {/* CARD CONTAINER 
+        We use a fixed height (h-[34rem]) so the container doesn't collapse 
+        since its children are now absolute-positioned.
+      */}
+      <div className="relative w-full max-w-md h-[34rem]">
         
-        {/* IMAGE AREA */}
-        <div className="relative aspect-square w-full bg-zinc-100 dark:bg-zinc-800">
-          <img 
-            src={currentItem.images?.url} 
-            alt="Caption target" 
-            className="h-full w-full object-cover"
-          />
-        </div>
+        {/* NEXT CARD (Background) */}
+        {nextItem && (
+          <div className="absolute inset-0 z-0 flex flex-col overflow-hidden rounded-2xl bg-white shadow-xl border border-zinc-200 dark:bg-zinc-900 dark:border-zinc-800 scale-95 opacity-50 blur-[2px] transition-all duration-300">
+            <div className="relative aspect-square w-full bg-zinc-100 dark:bg-zinc-800">
+              <img 
+                src={nextItem.images?.url} 
+                alt="Next caption" 
+                className="h-full w-full object-cover"
+              />
+            </div>
+            <div className="flex flex-1 items-center justify-center p-6 text-center">
+              <p className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+                {nextItem.content || "Untitled Caption"}
+              </p>
+            </div>
+          </div>
+        )}
 
-        {/* CAPTION AREA */}
-        <div className="p-6 text-center">
-          <p className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
-            {currentItem.content || "Untitled Caption"}
-          </p>
-        </div>
+        {/* CURRENT CARD (Foreground) */}
+        {currentItem && (
+          <div 
+            className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-zinc-200 dark:bg-zinc-900 dark:border-zinc-800 transition-all duration-300 ease-in-out
+              ${animatingOut === 'left' ? '-translate-x-full rotate-[-10deg] opacity-0' : ''}
+              ${animatingOut === 'right' ? 'translate-x-full rotate-[10deg] opacity-0' : ''}
+              ${!animatingOut ? 'translate-x-0 rotate-0 opacity-100' : ''}
+            `}
+          >
+            <div className="relative aspect-square w-full bg-zinc-100 dark:bg-zinc-800">
+              <img 
+                src={currentItem.images?.url} 
+                alt="Caption target" 
+                className="h-full w-full object-cover"
+              />
+            </div>
+            <div className="flex flex-1 items-center justify-center bg-white p-6 text-center dark:bg-zinc-900">
+              <p className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
+                {currentItem.content || "Untitled Caption"}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* CONTROLS */}
       <div className="flex items-center gap-8">
-        {/* DISLIKE BUTTON (-1) */}
         <button
           onClick={() => handleVote(-1)}
-          className="group flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-lg ring-1 ring-zinc-200 transition-all hover:scale-110 hover:bg-red-50 dark:bg-zinc-900 dark:ring-zinc-800 dark:hover:bg-red-950/30"
-          aria-label="Dislike"
+          disabled={animatingOut !== null}
+          className="group flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-lg ring-1 ring-zinc-200 transition-all hover:scale-110 hover:bg-red-50 disabled:opacity-50 dark:bg-zinc-900 dark:ring-zinc-800 dark:hover:bg-red-950/30"
+          aria-label="Dislike (Left Arrow)"
         >
           <X className="h-8 w-8 text-zinc-400 transition-colors group-hover:text-red-500" />
         </button>
 
-        {/* LIKE BUTTON (+1) */}
         <button
           onClick={() => handleVote(1)}
-          className="group flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-lg ring-1 ring-zinc-200 transition-all hover:scale-110 hover:bg-green-50 dark:bg-zinc-900 dark:ring-zinc-800 dark:hover:bg-green-950/30"
-          aria-label="Like"
+          disabled={animatingOut !== null}
+          className="group flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-lg ring-1 ring-zinc-200 transition-all hover:scale-110 hover:bg-green-50 disabled:opacity-50 dark:bg-zinc-900 dark:ring-zinc-800 dark:hover:bg-green-950/30"
+          aria-label="Like (Right Arrow)"
         >
           <Heart className="h-8 w-8 fill-transparent text-zinc-400 transition-colors group-hover:fill-green-500 group-hover:text-green-500" />
         </button>
       </div>
 
-      {/* HIDDEN PRELOADER FOR NEXT ITEM */}
-      {/* This renders the NEXT image in a hidden div so the browser caches it */}
-      {nextItem && nextItem.images?.url && (
-        <div className="hidden">
-           <img src={nextItem.images.url} alt="preload" />
-        </div>
-      )}
+      <p className="text-xs text-zinc-400 dark:text-zinc-500">
+        Tip: You can use your ← and → arrow keys to vote.
+      </p>
     </div>
   )
 }

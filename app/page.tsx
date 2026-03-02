@@ -3,6 +3,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import AuthButton from "@/components/AuthButton";
 import VotingInterface from "@/components/VotingInterface";
+import ImageUploader from "@/components/ImageUploader"; // <-- Import your new component
 
 // 1. Define the shape of your data
 type Caption = {
@@ -11,7 +12,7 @@ type Caption = {
   image_id: string
   images: {
     url: string
-  } | null // This handles if the join returns a null image
+  } | null 
 }
 
 export default async function Home() {
@@ -28,7 +29,10 @@ export default async function Home() {
     }
   )
 
+  // Get both the user and the active session
   const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession() // <-- Added to get the JWT
+  const token = session?.access_token
 
   // 2. Initialize with the explicit type
   let captions: Caption[] = []
@@ -70,17 +74,19 @@ export default async function Home() {
         {!user ? (
           <div className="w-full rounded-xl border-2 border-dashed border-zinc-300 p-20 text-center dark:border-zinc-800">
             <h2 className="text-xl font-semibold">Please log in to start voting</h2>
-            <p className="text-zinc-500 mt-2">Access is restricted to authorized users.</p>
+            <p className="mt-2 text-zinc-500">Access is restricted to authorized users.</p>
           </div>
         ) : (
           <>
             {error && (
-              <div className="p-4 bg-red-100 text-red-700 rounded-md mb-6 w-full">
+              <div className="mb-6 w-full rounded-md bg-red-100 p-4 text-red-700">
                 Error: {error.message}
               </div>
             )}
             
-            {/* The types should now match perfectly */}
+            {/* Render the Image Uploader if we have a valid token */}
+            {token && <ImageUploader token={token} />}
+            
             <VotingInterface initialCaptions={captions} userId={user.id} />
           </>
         )}

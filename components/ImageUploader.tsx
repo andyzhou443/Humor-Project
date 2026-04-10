@@ -2,7 +2,8 @@
 
 import { useState } from 'react'
 
-export default function ImageUploader({ token }: { token: string }) {
+// Added userId to the props definition
+export default function ImageUploader({ token, userId }: { token: string; userId: string }) {
   const [status, setStatus] = useState<string>('')
   const [generatedCaptions, setGeneratedCaptions] = useState<any[]>([])
   const [isUploading, setIsUploading] = useState(false)
@@ -26,10 +27,7 @@ export default function ImageUploader({ token }: { token: string }) {
         body: JSON.stringify({ contentType: file.type })
       })
       if (!res1.ok) throw new Error('Failed to generate presigned URL')
-      const data = await res1.json()
-console.log("Step 1 Response:", data) // <-- Check your browser console!
-
-const { presignedUrl, cdnUrl } = data
+      const { presignedUrl, cdnUrl } = await res1.json()
 
       // STEP 2: Upload Image Bytes
       setStatus('Step 2: Uploading image to storage...')
@@ -50,7 +48,10 @@ const { presignedUrl, cdnUrl } = data
         },
         body: JSON.stringify({
           imageUrl: cdnUrl,
-          isCommonUse: false
+          isCommonUse: false,
+          // NEW FIELDS:
+          created_by_user_id: userId,
+          modified_by_user_id: userId
         })
       })
       if (!res3.ok) throw new Error('Failed to register image')
@@ -64,7 +65,12 @@ const { presignedUrl, cdnUrl } = data
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ imageId })
+        body: JSON.stringify({ 
+          imageId,
+          // NEW FIELDS (assuming your caption table also requires these):
+          created_by_user_id: userId,
+          modified_by_user_id: userId
+        })
       })
       if (!res4.ok) throw new Error('Failed to generate captions')
       const captions = await res4.json()

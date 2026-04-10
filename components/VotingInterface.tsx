@@ -19,11 +19,25 @@ interface VotingInterfaceProps {
 }
 
 export default function VotingInterface({ initialCaptions, userId }: VotingInterfaceProps) {
-  const [queue, setQueue] = useState<CaptionData[]>(initialCaptions)
+  // NEW: Filter out "untitled caption" right at the start
+  const [queue, setQueue] = useState<CaptionData[]>(() => {
+    return initialCaptions.filter((caption) => {
+      if (!caption.content) return false; // Skip null or empty captions
+      const text = caption.content.trim().toLowerCase();
+      // Filter out variations of "untitled caption"
+      return text !== 'untitled caption' && text !== 'untitled caption.';
+    });
+  });
+
   const [currentIndex, setCurrentIndex] = useState(0)
   
-  // NEW: State to track which direction the card is animating out
   const [animatingOut, setAnimatingOut] = useState<'left' | 'right' | null>(null)
+  const [error, setError] = useState<string | null>(null);
+
+  const [isDragging, setIsDragging] = useState(false)
+  const [touchStartX, setTouchStartX] = useState<number | null>(null)
+  const [dragX, setDragX] = useState<number>(0)
+  const SWIPE_THRESHOLD = 100 
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -34,39 +48,69 @@ export default function VotingInterface({ initialCaptions, userId }: VotingInter
   const nextItem = queue[currentIndex + 1]
 
   const handleVote = useCallback(async (voteValue: number) => {
-    // Prevent double-clicking while an animation is already running
     if (!currentItem || animatingOut) return
 
-    // 1. Trigger the swipe-out animation based on the vote value
     setAnimatingOut(voteValue === 1 ? 'right' : 'left')
-
     const captionIdToVote = currentItem.id
+
     const votePayload = {
       profile_id: userId,
       caption_id: captionIdToVote,
       vote_value: voteValue,
-      created_datetime_utc: new Date().toISOString(),
-      modified_datetime_utc: new Date().toISOString(),
+      created_by_user_id: userId,
+      modified_by_user_id: userId,
     }
 
-    // 2. Wait for the 300ms CSS transition to finish before changing the data
     setTimeout(() => {
       if (currentIndex < queue.length - 1) {
         setCurrentIndex((prev) => prev + 1)
       } else {
         setQueue([]) 
       }
-      // Reset animation state so the new card appears in the center
       setAnimatingOut(null)
+      setDragX(0) 
+      setIsDragging(false) 
     }, 300)
 
-    // 3. Send to DB (we don't await this so it doesn't block the UI)
-    supabase.from('caption_votes').upsert(votePayload, { onConflict: 'profile_id, caption_id' })
-      .then(({ error }) => {
-        if (error) console.error('Error recording vote:', error)
-      })
+    try {
+      const { error: supabaseError } = await supabase
+        .from('caption_votes')
+        .upsert(votePayload, { onConflict: 'profile_id, caption_id' })
+
+      if (supabaseError) throw supabaseError;
+    } catch (err) {
+      console.error('Vote failed:', err);
+      alert("Connection error: Your vote wasn't saved."); 
+    }
 
   }, [currentItem, currentIndex, queue.length, userId, supabase, animatingOut])
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (animatingOut) return 
+    setIsDragging(true)
+    setTouchStartX(e.clientX)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging || touchStartX === null || animatingOut) return
+    setDragX(e.clientX - touchStartX)
+  }
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDragging) return
+    setIsDragging(false)
+    e.currentTarget.releasePointerCapture(e.pointerId)
+
+    if (dragX > SWIPE_THRESHOLD) {
+      handleVote(1) 
+    } else if (dragX < -SWIPE_THRESHOLD) {
+      handleVote(-1) 
+    }
+    
+    setDragX(0)
+    setTouchStartX(null)
+  }
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -95,10 +139,6 @@ export default function VotingInterface({ initialCaptions, userId }: VotingInter
   return (
     <div className="flex w-full flex-col items-center gap-6">
       
-      {/* CARD CONTAINER 
-        We use a fixed height (h-[34rem]) so the container doesn't collapse 
-        since its children are now absolute-positioned.
-      */}
       <div className="relative w-full max-w-md h-[34rem]">
         
         {/* NEXT CARD (Background) */}
@@ -122,20 +162,31 @@ export default function VotingInterface({ initialCaptions, userId }: VotingInter
         {/* CURRENT CARD (Foreground) */}
         {currentItem && (
           <div 
-            className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-zinc-200 dark:bg-zinc-900 dark:border-zinc-800 transition-all duration-300 ease-in-out
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl border border-zinc-200 dark:bg-zinc-900 dark:border-zinc-800 touch-none cursor-grab active:cursor-grabbing
+              ${dragX === 0 ? 'transition-all duration-300 ease-in-out' : ''} 
               ${animatingOut === 'left' ? '-translate-x-full rotate-[-10deg] opacity-0' : ''}
               ${animatingOut === 'right' ? 'translate-x-full rotate-[10deg] opacity-0' : ''}
-              ${!animatingOut ? 'translate-x-0 rotate-0 opacity-100' : ''}
+              ${!animatingOut && dragX === 0 ? 'translate-x-0 rotate-0 opacity-100' : ''}
             `}
+            style={{
+              transform: dragX !== 0 && !animatingOut 
+                ? `translateX(${dragX}px) rotate(${dragX * 0.05}deg)` 
+                : undefined,
+            }}
           >
-            <div className="relative aspect-square w-full bg-zinc-100 dark:bg-zinc-800">
+            <div className="relative aspect-square w-full bg-zinc-100 dark:bg-zinc-800 pointer-events-none">
               <img 
+                draggable={false} 
                 src={currentItem.images?.url} 
                 alt="Caption target" 
                 className="h-full w-full object-cover"
               />
             </div>
-            <div className="flex flex-1 items-center justify-center bg-white p-6 text-center dark:bg-zinc-900">
+            <div className="flex flex-1 items-center justify-center bg-white p-6 text-center dark:bg-zinc-900 pointer-events-none">
               <p className="text-lg font-medium text-zinc-900 dark:text-zinc-100">
                 {currentItem.content || "Untitled Caption"}
               </p>
@@ -165,7 +216,7 @@ export default function VotingInterface({ initialCaptions, userId }: VotingInter
       </div>
 
       <p className="text-xs text-zinc-400 dark:text-zinc-500">
-        Tip: You can use your ← and → arrow keys to vote.
+        Tip: You can swipe, tap buttons, or use your ← and → arrow keys to vote.
       </p>
     </div>
   )

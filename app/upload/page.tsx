@@ -49,7 +49,8 @@ export default async function UploadPage() {
           <>
             {/* Render the Image Uploader if we have a valid token */}
             {token ? (
-              <ImageUploader token={token} />
+              // FIX APPLIED HERE: Added userId={user.id}
+              <ImageUploader token={token} userId={user.id} />
             ) : (
               <div className="w-full rounded-md bg-red-100 p-4 text-red-700">
                 Error: Unable to retrieve active session token. Please try logging in again.
